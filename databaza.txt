@@ -1,0 +1,279 @@
+import pandas as pd
+import seaborn as sns
+import numpy as np
+from statistics import mean
+import matplotlib.pyplot as plt
+import warnings
+import numpy as np
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier,BaggingClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.svm import SVC
+from sklearn.metrics import accuracy_score, classification_report,ConfusionMatrixDisplay, \
+                            precision_score, recall_score, f1_score, roc_auc_score,roc_curve,confusion_matrix, precision_recall_curve
+import xgboost
+
+from sklearn import metrics 
+from sklearn.model_selection import  train_test_split, RepeatedStratifiedKFold, cross_val_score
+from xgboost import XGBClassifier
+from sklearn.preprocessing import StandardScaler, MinMaxScaler,RobustScaler
+from imblearn.over_sampling import SMOTE
+from sklearn.impute import SimpleImputer
+
+
+warnings.filterwarnings("ignore")
+%matplotlib inline
+df= pddf=pd.read_csv(f"/kaggle/input/aps-failure-at-scania-trucks-data-set/aps_failure_training_set.csv")
+df
+df.shape
+df['class'].value_counts()
+
+import math
+per_pos_class = ((df['class']=='pos').sum()/df.shape[0])*100
+print(round(per_pos_class,2),"%")
+# define numerical & categorical columns
+numeric_features = [feature for feature in df.columns if df[feature].dtype != 'O']
+categorical_features = [feature for feature in df.columns if df[feature].dtype == 'O']
+
+# print columns
+print('We have {} numerical features : {}'.format(len(numeric_features), numeric_features))
+print('\nWe have {} categorical features : {}'.format(len(categorical_features), categorical_features))
+
+# replacing all na values with nan(null)
+df=df.replace('na',np.nan)
+
+# Converting all datatypes all columns to float exluding class column
+
+for feature in df.columns:
+    if df[feature].dtype == 'O' and feature!='class':
+        df[feature]=df[feature].astype(float)
+
+#numerical features count
+numerical_features = [feature for feature in df.columns if df[feature].dtype!='O']
+print(len(numerical_features))
+
+missing_values = df.isna().sum().div(df.shape[0]).mul(100).to_frame().sort_values(by=0,ascending= False)
+
+drop_cols=missing_values[missing_values[0]>65]
+print(list(drop_cols.index))
+
+df.drop(list(drop_cols.index),axis=1, inplace=True)
+
+#Checking number of columns after dropping null values columns
+df.shape
+
+total_missing_cells= df.isnull().sum().sum()
+total_cells = np.product(df.shape)
+missing_cell_per = (total_missing_cells/total_cells)*100
+print(f"there are {round(missing_cell_per)}% missing cells in data")
+
+df.to_csv("APS_data_cleaned", index=False)
+
+df.describe()
+
+# Checking memory usage of each column
+df.memory_usage()
+
+plt.figure(figsize=(10,6))
+sns.countplot(x=df["class"])
+plt.title("neg:{0} / pos:{1}".format(df['class'].value_counts()[0], df["class"].value_counts()[1]))
+
+# Prepare Data
+# Split features and target
+X = df.drop('class', axis=1)
+y = df['class']  # 'pos' / 'neg'
+
+# Split data (stratified is better if classes are imbalanced)
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.33, random_state=10
+)
+
+#Impute Missing Values Using median imputation
+
+imputer = SimpleImputer(strategy="median")
+X_train_imputed = imputer.fit_transform(X_train)
+X_test_imputed = imputer.transform(X_test)
+
+#Handle Imbalanced Data with SMOTE
+# Apply SMOTE only on training data
+smote = SMOTE(random_state=42)
+X_train_resampled, y_train_resampled = smote.fit_resample(X_train_imputed, y_train)
+
+#Train Random Forest Classifier
+
+
+model = RandomForestClassifier(
+    n_estimators=100,
+    class_weight='balanced',
+    random_state=42
+)
+model.fit(X_train_resampled, y_train_resampled)
+
+# Predict on Test Set (With Threshold 0.3)
+
+y_probs = model.predict_proba(X_test_imputed)[:, 1]  # Probabilities for class 'pos'
+y_pred = (y_probs >= 0.3).astype(int)  # Custom threshold to reduce false negatives
+
+# Convert y_test ('neg'/'pos') to numeric (0/1)
+y_test = (y_test == "pos").astype(int)
+
+# Classification report
+print("\n🔹 Classification Report:")
+print(classification_report(y_test, y_pred))
+
+# Confusion Matrix
+cm = confusion_matrix(y_test, y_pred)
+sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
+            xticklabels=["Negative", "Positive"],
+            yticklabels=["Negative", "Positive"])
+plt.xlabel("Predicted")
+plt.ylabel("Actual")
+plt.title("Confusion Matrix")
+plt.show()
+
+
+# Precision-Recall Curve
+
+precision, recall, _ = precision_recall_curve(y_test, y_probs)
+plt.plot(recall, precision, marker='.')
+plt.xlabel('Recall')
+plt.ylabel('Precision')
+plt.title('Precision-Recall Curve')
+plt.grid()
+plt.show()
+
+# ROC AUC Score
+roc_auc = roc_auc_score(y_test, y_probs)
+print(f"\n🔹 ROC AUC Score: {roc_auc:.4f}")
+
+# Cost Evaluation
+
+# Get confusion matrix values
+tn, fp, fn, tp = cm.ravel()
+
+# Define custom cost formula
+Total_cost = (10 * fp) + (500 * fn)
+print(f"🔹 Total Cost of False Positives & Negatives: Rs. {Total_cost} /-")
+
+# Predict on training data
+train_preds = model.predict(X_train_resampled)
+
+# Predict on test data with 0.5 threshold (for accuracy only)
+test_preds = model.predict(X_test_imputed)
+test_preds = np.where(test_preds == "pos", 1, 0)  # Ensure numeric format
+
+print(f"\n🔹 Training Accuracy: {accuracy_score(y_train_resampled, train_preds):.4f}")
+print(f"🔹 Test Accuracy (threshold=0.5): {accuracy_score(y_test, test_preds):.4f}")
+
+precision = precision_score(y_test, y_pred)
+recall = recall_score(y_test, y_pred)
+f1 = f1_score(y_test, y_pred)
+roc_auc = roc_auc_score(y_test, y_probs)
+
+print(f"\nPrecision (pos class): {precision:.4f}")
+print(f"Recall (pos class):    {recall:.4f}")
+print(f"F1 Score:              {f1:.4f}")
+print(f"ROC AUC Score:         {roc_auc:.4f}")
+
+precision = precision_score(y_test, y_pred)
+recall = recall_score(y_test, y_pred)
+f1 = f1_score(y_test, y_pred)
+roc_auc = roc_auc_score(y_test, y_probs)
+
+print(f"\nPrecision (pos class): {precision:.4f}")
+print(f"Recall (pos class):    {recall:.4f}")
+print(f"F1 Score:              {f1:.4f}")
+print(f"ROC AUC Score:         {roc_auc:.4f}")
+
+thresholds = np.arange(0, 1, 0.05)
+for thresh in thresholds:
+    temp_pred = (y_probs >= thresh).astype(int)
+    p = precision_score(y_test, temp_pred)
+    r = recall_score(y_test, temp_pred)
+    print(f"Threshold: {thresh:.2f} -> Precision: {p:.3f}, Recall: {r:.3f}")
+
+# Load Data
+X = df.drop('class', axis=1)
+y = (df['class'] == 'pos').astype(int)  # Convert to binary (0 = neg, 1 = pos)
+
+# Step 2: Train/Test Split
+X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y, test_size=0.3, random_state=42)
+
+#Missing Value imputation
+imputer = SimpleImputer(strategy="median") 
+X_train_imputed = imputer.fit_transform(X_train)  
+X_test_imputed = imputer.transform(X_test)
+
+# Step 3: SMOTE Oversampling
+smote = SMOTE(random_state=42)
+X_train_resampled, y_train_resampled = smote.fit_resample(X_train_imputed, y_train)
+
+# Train XGBoost Model
+model = XGBClassifier(
+    n_estimators=100,
+    max_depth=5,
+    learning_rate=0.1,
+    scale_pos_weight=(y_train == 0).sum() / (y_train == 1).sum(),  # Balance classes
+    use_label_encoder=False,
+    eval_metric='logloss',
+    random_state=42
+)
+
+model.fit(X_train_resampled, y_train_resampled)
+
+# Predict Probabilities and Apply Custom Threshold
+y_probs = model.predict_proba(X_test)[:, 1]
+y_pred = (y_probs >= 0.3).astype(int)
+
+# Evaluation
+print("Classification Report:\n", classification_report(y_test, y_pred))
+
+cm = confusion_matrix(y_test, y_pred)
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=['Negative', 'Positive'], yticklabels=['Negative', 'Positive'])
+plt.xlabel("Predicted")
+plt.ylabel("Actual")
+plt.title("Confusion Matrix")
+plt.show()
+
+precision, recall, _ = precision_recall_curve(y_test, y_probs)
+plt.plot(recall, precision)
+plt.xlabel('Recall')
+plt.ylabel('Precision')
+plt.title('Precision-Recall Curve')
+plt.show()
+
+roc_auc = roc_auc_score(y_test, y_probs)
+print(f"ROC AUC Score: {roc_auc:.4f}")
+
+train_preds = model.predict(X_train_resampled)
+test_preds = model.predict(X_test_imputed)
+
+test_preds = np.where(test_preds == "pos", 1, 0)
+
+print("Train Accuracy:", accuracy_score(y_train_resampled, train_preds))
+print("Test Accuracy:", accuracy_score(y_test, test_preds))
+
+tp,fp,fn,tn=cm.ravel()
+Total_cost_gr = 10*fp + 500 *fn
+print(f"Total cost of repair of gradiend boost = Rs. {Total_cost_gr} /-")
+
+print("\n🔍 Classification Report:")
+print(classification_report(y_test, y_pred, target_names=['neg', 'pos']))
+
+precision = precision_score(y_test, y_pred)
+recall = recall_score(y_test, y_pred)
+f1 = f1_score(y_test, y_pred)
+roc_auc = roc_auc_score(y_test, y_probs)
+
+print(f"\nPrecision (pos class): {precision:.4f}")
+print(f"Recall (pos class):    {recall:.4f}")
+print(f"F1 Score:              {f1:.4f}")
+print(f"ROC AUC Score:         {roc_auc:.4f}")
+
+thresholds = np.arange(0, 1, 0.05)
+for thresh in thresholds:
+    temp_pred = (y_probs >= thresh).astype(int)
+    p = precision_score(y_test, temp_pred)
+    r = recall_score(y_test, temp_pred)
+    print(f"Threshold: {thresh:.2f} -> Precision: {p:.3f}, Recall: {r:.3f}")
